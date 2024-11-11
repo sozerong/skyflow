@@ -1,23 +1,23 @@
 import requests
 import math
-import time
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from .serializers import ObservationSerializer
 from datetime import datetime, timedelta
 
-interval_time = 7200
-interval_hour = 2
+interval_time = 432000  # 1시간 간격
+interval_hour = 120
+
 class WeatherPredictionView(APIView):
     def get_weather_data(self, timestamp):
-        url = 'https://apihub.kma.go.kr/api/typ01/url/upp_temp.php'
+        url = 'https://apihub.kma.go.kr/api/typ01/url/kma_wpf.php'
         params = {
             'tm': timestamp,
             'stn': 0,
-            'pa': 0,
+            'mode': 'L',
             'help': 0,
-            'authKey': '',
+            'authKey': '',  # 실제 인증키를 여기에 입력하세요
         }
 
         try:
@@ -28,13 +28,19 @@ class WeatherPredictionView(APIView):
             
             data_text = response.text
             lines = data_text.splitlines()
+
+            # 유효한 데이터가 있는지 확인
+            if len(lines) < 3 or "#7777END" in lines[1]:
+                print("No valid weather data found in the response.")
+                return None
+
             for line in lines:
                 if line.startswith("#"):
                     continue
                 parts = line.split()
                 if len(parts) >= 8:
-                    wind_direction = float(parts[6])
-                    wind_speed = float(parts[7])
+                    wind_direction = float(parts[6])  # WD
+                    wind_speed = float(parts[7])      # WS
                     return {
                         'wind_direction': wind_direction,
                         'wind_speed': wind_speed
@@ -48,13 +54,13 @@ class WeatherPredictionView(APIView):
         wind_direction_rad = math.radians(wind_direction)
         R = 6371.0 
 
-        movement_factor = 0.8
+        movement_factor = 0.9
         adjusted_wind_speed = wind_speed * movement_factor
         
-        distance = adjusted_wind_speed * (time_interval / interval_time)  # km
+        distance = adjusted_wind_speed * (time_interval / 3600)  # km
         
-        new_latitude = latitude + (distance / R) * math.cos(wind_direction_rad)
-        new_longitude = longitude + (distance / R) * math.sin(wind_direction_rad) / math.cos(math.radians(latitude))
+        new_latitude = latitude - (distance / R) * math.cos(wind_direction_rad)
+        new_longitude = longitude - (distance / R) * math.sin(wind_direction_rad) / math.cos(math.radians(latitude))
         
         return new_latitude, new_longitude
 
@@ -63,57 +69,58 @@ class WeatherPredictionView(APIView):
         if serializer.is_valid():
             latitude = serializer.validated_data['latitude']
             longitude = serializer.validated_data['longitude']
+            input_time = serializer.validated_data['time']
             direction = serializer.validated_data['direction']
             
+            # 받은 datetime 객체의 분을 00으로 설정
+            input_time = input_time.replace(minute=0)
+            
+            # 수정된 시간을 YYYYMMDDHHMM 형식의 정수로 변환
+            timestamp = int(input_time.strftime('%Y%m%d%H%M'))
+            
+            print("Converted timestamp:", timestamp)  # 디버그용 출력
+
             positions = {}
-            current_time = datetime.now()
             total_distance_covered = 0
-            target_distance = 250  # 북한에서 남한까지의 거리 (약 250 km)
+            target_distance = 250  # 예측하려는 총 이동 거리 (예: 250 km)
 
-            # 하루 단위의 바람 데이터 한 번만 가져오기
-            timestamp_str = current_time.strftime('%Y%m%d') + '0000'
-            timestamp = int(timestamp_str)
-            weather_data = self.get_weather_data(timestamp)
+            # 과거로 시간 이동하며 데이터를 반복 호출하여 출발지 예측
+            hour_offsets = range(-1, -11, -1)  # 과거 10시간 간격으로 데이터 호출
 
-            if weather_data:
-                wind_speed = weather_data['wind_speed']
-                wind_direction = weather_data['wind_direction']
+            for hour_offset in hour_offsets:
+                prediction_time = input_time + timedelta(hours=hour_offset)
+                timestamp_str = prediction_time.strftime('%Y%m%d%H%M')
 
-                # 예측 범위 설정
-                if direction == "-1":
-                    hour_offsets = range(-6, 1)  # 과거 6시간
-                else:
-                    hour_offsets = range(1, 7)  # 미래 6시간
+                # 바람 데이터 호출
+                weather_data = self.get_weather_data(timestamp_str)
+                
+                if weather_data:
+                    wind_speed = weather_data['wind_speed']
+                    wind_direction = weather_data['wind_direction']
 
-                for hour_offset in hour_offsets:
-                    time_interval = abs(hour_offset) * interval_time  # 1시간 간격 (3600초)
-
-                    # 위치 계산
+                    time_interval = abs(hour_offset) * interval_time
                     new_lat, new_lon = self.calculate_new_position(
                         latitude, longitude, wind_speed, wind_direction, time_interval
                     )
 
-                    # 위치와 누적 이동 거리 저장
-                    prediction_time = (current_time + timedelta(hours=hour_offset*interval_hour)).strftime('%Y-%m-%d %H:%M:%S')
-                    total_distance_covered += wind_speed * 0.8 * (time_interval / interval_time)  # 누적 이동 거리 계산
-
+                    total_distance_covered += wind_speed * 0.8 * (time_interval / interval_time)
                     positions[hour_offset] = {
-                        'prediction_time': prediction_time,
+                        'prediction_time': prediction_time.strftime('%Y-%m-%d %H:%M:%S'),
                         'latitude': new_lat,
                         'longitude': new_lon,
                         'cumulative_distance': total_distance_covered
                     }
 
-                    # 목표 거리 도달 여부 확인
-                    if total_distance_covered >= target_distance:
-                        positions['arrival_time'] = prediction_time
-                        break
+                    # 다음 위치 계산을 위해 좌표 업데이트
+                    latitude, longitude = new_lat, new_lon
 
-                return Response(positions, status=status.HTTP_200_OK)
-            else:
-                return Response(
-                    {"error": "Failed to fetch weather data"},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
+                    if total_distance_covered >= target_distance:
+                        positions['departure_time'] = prediction_time.strftime('%Y-%m-%d %H:%M:%S')
+                        break
+                else:
+                    positions[hour_offset] = {"error": "Failed to fetch weather data"}
+                    break
+
+            return Response(positions, status=status.HTTP_200_OK)
         else:
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
