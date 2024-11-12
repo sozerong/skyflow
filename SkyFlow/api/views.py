@@ -17,7 +17,7 @@ class WeatherPredictionView(APIView):
             'stn': 0,
             'mode': 'H',
             'help': 0,
-            'authKey': 'Qx0aZmAYR1OdGmZgGHdTPQ',  
+            'authKey': '',  
         }
 
         try:
