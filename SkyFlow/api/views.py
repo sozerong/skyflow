@@ -6,8 +6,8 @@ from rest_framework import status
 from .serializers import ObservationSerializer
 from datetime import datetime, timedelta
 
-interval_time = 432000  # 1시간 간격
-interval_hour = 120
+interval_time = 7200 
+interval_hour = 2
 
 class WeatherPredictionView(APIView):
     def get_weather_data(self, timestamp):
@@ -15,9 +15,9 @@ class WeatherPredictionView(APIView):
         params = {
             'tm': timestamp,
             'stn': 0,
-            'mode': 'L',
+            'mode': 'H',
             'help': 0,
-            'authKey': '',  # 실제 인증키를 여기에 입력하세요
+            'authKey': 'Qx0aZmAYR1OdGmZgGHdTPQ',  
         }
 
         try:
@@ -54,7 +54,7 @@ class WeatherPredictionView(APIView):
         wind_direction_rad = math.radians(wind_direction)
         R = 6371.0 
 
-        movement_factor = 0.9
+        movement_factor = 0.95
         adjusted_wind_speed = wind_speed * movement_factor
         
         distance = adjusted_wind_speed * (time_interval / 3600)  # km
@@ -85,7 +85,7 @@ class WeatherPredictionView(APIView):
             target_distance = 250  # 예측하려는 총 이동 거리 (예: 250 km)
 
             # 과거로 시간 이동하며 데이터를 반복 호출하여 출발지 예측
-            hour_offsets = range(-1, -11, -1)  # 과거 10시간 간격으로 데이터 호출
+            hour_offsets = range(-1, -121, -1)  
 
             for hour_offset in hour_offsets:
                 prediction_time = input_time + timedelta(hours=hour_offset)
